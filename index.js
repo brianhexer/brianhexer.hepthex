@@ -219,55 +219,165 @@ requestAnimationFrame(animateParticles);
    ========================================================================== */
 const workSection = document.getElementById('work');
 const horizontalWrapper = document.getElementById('horizontal-wrapper');
+const HORIZONTAL_SCROLL_BREAKPOINT = 1024;
 
 let workSectionTop = 0;
 let workContainerWidth = 0;
+let horizontalScrollProgress = 0;
+let horizontalWheelLocked = false;
+let horizontalScrollFrame = 0;
 
-function setupHorizontalScroll() {
-  if (window.innerWidth <= 768) {
-    horizontalWrapper.style.transform = 'none';
-    workSection.style.height = 'auto';
-    return;
-  }
-
-  // Cache coordinates to avoid layout thrashing in scroll listeners
-  workSectionTop = workSection.offsetTop;
-  workContainerWidth = horizontalWrapper.scrollWidth - window.innerWidth;
-
-  const sectionHeight = workContainerWidth + window.innerHeight;
-  workSection.style.height = `${sectionHeight}px`;
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
 }
 
-// Optimized scroll handler leveraging cached values (60fps performance)
-window.addEventListener('scroll', () => {
-  if (window.innerWidth <= 768) {
+function setupHorizontalScroll() {
+  if (!workSection || !horizontalWrapper) return;
+
+  if (window.innerWidth <= HORIZONTAL_SCROLL_BREAKPOINT) {
+    workSection.style.height = 'auto';
+    horizontalWrapper.style.transform = 'none';
+    horizontalWheelLocked = false;
+    horizontalScrollProgress = 0;
+    return;
+  }
+
+  workSectionTop = workSection.getBoundingClientRect().top + window.scrollY;
+  workContainerWidth = Math.max(horizontalWrapper.scrollWidth - window.innerWidth, 0);
+  horizontalScrollProgress = clamp(window.scrollY - workSectionTop, 0, workContainerWidth);
+
+  workSection.style.height = `${window.innerHeight + workContainerWidth}px`;
+  horizontalWrapper.style.transform = 'translate3d(0px, 0, 0)';
+}
+
+function updateHorizontalScroll() {
+  horizontalScrollFrame = 0;
+
+  if (!workSection || !horizontalWrapper) return;
+
+  if (window.innerWidth <= HORIZONTAL_SCROLL_BREAKPOINT) {
     horizontalWrapper.style.transform = 'none';
     return;
   }
 
-  const scrollTop = window.scrollY;
-
-  if (scrollTop >= workSectionTop && scrollTop <= workSectionTop + workContainerWidth) {
-    const scrollProgress = scrollTop - workSectionTop;
-    horizontalWrapper.style.transform = `translateX(-${scrollProgress}px)`;
-  } else if (scrollTop < workSectionTop) {
-    horizontalWrapper.style.transform = 'translateX(0px)';
-  } else {
-    horizontalWrapper.style.transform = `translateX(-${workContainerWidth}px)`;
+  if (!horizontalWheelLocked) {
+    horizontalScrollProgress = clamp(window.scrollY - workSectionTop, 0, workContainerWidth);
   }
-});
 
-window.addEventListener('load', () => {
-  setupHorizontalScroll();
-  // Safe multi-phase measurement for dynamic images/fonts layout settling
-  setTimeout(setupHorizontalScroll, 300);
-  setTimeout(setupHorizontalScroll, 1000);
-});
+  horizontalWrapper.style.transform = `translate3d(-${horizontalScrollProgress}px, 0, 0)`;
+}
 
-window.addEventListener('resize', () => {
+function requestHorizontalScrollUpdate() {
+  if (horizontalScrollFrame) return;
+  horizontalScrollFrame = window.requestAnimationFrame(updateHorizontalScroll);
+}
+
+function handleHorizontalWheel(event) {
+  if (!workSection || !horizontalWrapper) return;
+  if (window.innerWidth <= HORIZONTAL_SCROLL_BREAKPOINT) return;
+
+  const scrollTop = window.scrollY;
+  const delta = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? event.deltaY : event.deltaX;
+  const enteringShowcase = delta > 0 && scrollTop < workSectionTop && scrollTop + window.innerHeight >= workSectionTop;
+  const inHorizontalZone = scrollTop >= workSectionTop && scrollTop <= workSectionTop + workContainerWidth;
+
+  if (!delta || (!inHorizontalZone && !enteringShowcase)) return;
+
+  const direction = Math.sign(delta);
+
+  if (direction > 0) {
+    if (horizontalScrollProgress >= workContainerWidth) return;
+
+    event.preventDefault();
+    horizontalWheelLocked = true;
+
+    if (enteringShowcase) {
+      window.scrollTo(0, workSectionTop);
+    }
+
+    horizontalScrollProgress = clamp(horizontalScrollProgress + Math.max(Math.abs(delta), 24), 0, workContainerWidth);
+    requestHorizontalScrollUpdate();
+
+    if (horizontalScrollProgress >= workContainerWidth) {
+      horizontalWheelLocked = false;
+      window.scrollTo(0, workSectionTop + workContainerWidth);
+    }
+
+    return;
+  }
+
+  if (direction < 0) {
+    if (horizontalScrollProgress <= 0) return;
+
+    event.preventDefault();
+    horizontalWheelLocked = true;
+    horizontalScrollProgress = clamp(horizontalScrollProgress - Math.max(Math.abs(delta), 24), 0, workContainerWidth);
+    requestHorizontalScrollUpdate();
+
+    if (horizontalScrollProgress <= 0) {
+      horizontalWheelLocked = false;
+      window.scrollTo(0, workSectionTop);
+    }
+  }
+}
+
+if (workSection && horizontalWrapper) {
+  window.addEventListener('scroll', requestHorizontalScrollUpdate, { passive: true });
+  window.addEventListener('wheel', handleHorizontalWheel, { passive: false });
+
+  window.addEventListener('load', () => {
+    setupHorizontalScroll();
+    requestHorizontalScrollUpdate();
+
+    // Safe multi-phase measurement for dynamic images/fonts layout settling
+    setTimeout(() => {
+      setupHorizontalScroll();
+      requestHorizontalScrollUpdate();
+    }, 300);
+
+    setTimeout(() => {
+      setupHorizontalScroll();
+      requestHorizontalScrollUpdate();
+    }, 1000);
+  });
+
+  window.addEventListener('resize', () => {
+    setupHorizontalScroll();
+    requestHorizontalScrollUpdate();
+
+    setTimeout(() => {
+      setupHorizontalScroll();
+      requestHorizontalScrollUpdate();
+    }, 100);
+  });
+
+  if ('ResizeObserver' in window) {
+    const horizontalResizeObserver = new ResizeObserver(() => {
+      setupHorizontalScroll();
+      requestHorizontalScrollUpdate();
+    });
+
+    horizontalResizeObserver.observe(horizontalWrapper);
+  }
+
+  horizontalWrapper.querySelectorAll('img').forEach((image) => {
+    if (image.complete) return;
+    image.addEventListener('load', () => {
+      setupHorizontalScroll();
+      requestHorizontalScrollUpdate();
+    }, { once: true });
+  });
+
+  if (document.fonts && document.fonts.ready) {
+    document.fonts.ready.then(() => {
+      setupHorizontalScroll();
+      requestHorizontalScrollUpdate();
+    });
+  }
+
   setupHorizontalScroll();
-  setTimeout(setupHorizontalScroll, 100);
-});
+  requestHorizontalScrollUpdate();
+}
 
 
 /* ==========================================================================
